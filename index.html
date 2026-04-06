@@ -405,6 +405,7 @@ function calculatePower() {
 }
 
 // ========== ✨ 修正點 3：重構後的 3D 載入邏輯 ==========
+// ========== 3. 真實產品 3D 導入 (終極除錯版) ==========
 function initThreeScene() {
   const container = document.getElementById('three-container');
   const loadingEl = document.getElementById('loading3D');
@@ -412,6 +413,9 @@ function initThreeScene() {
   // 清除舊畫面
   Array.from(container.children).forEach(c => { if(c.tagName === 'CANVAS') c.remove(); });
   
+  loadingEl.style.display = 'flex';
+  loadingEl.innerHTML = '<div class="spinner"></div>準備載入 3D 模型...';
+
   if(!APP.spatialMap) generateSpatialGrid();
   const { rows, cols, cellW, matrix } = APP.spatialMap;
   const vw = cols * cellW; const vl = rows * cellW;
@@ -432,8 +436,10 @@ function initThreeScene() {
   const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(10, 20, 10); scene.add(sun);
 
   // 繪製地面網格
+  let hasFreeGrid = false;
   for(let r=0; r<rows; r++){
      for(let c=0; c<cols; c++){
+        if(matrix[r][c] === 'FREE') hasFreeGrid = true;
         const cx = c*cellW + cellW/2; const cz = r*cellW + cellW/2;
         const cellGeo = new THREE.PlaneGeometry(cellW*0.9, cellW*0.9);
         const cellMat = new THREE.MeshBasicMaterial({ color: matrix[r][c] === 'OBSTACLE' ? 0xE57373 : 0xA4C3B2, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
@@ -441,6 +447,64 @@ function initThreeScene() {
         cell.rotation.x = -Math.PI/2; cell.position.set(cx, 0.01, cz); scene.add(cell);
      }
   }
+
+  // 防呆機制：如果 AI 掃描把全場都標記為紅色障礙物，強制清空中心點來放模型！
+  if(!hasFreeGrid) {
+     matrix[Math.floor(rows/2)][Math.floor(cols/2)] = 'FREE';
+  }
+
+  try {
+      const loader = new THREE.GLTFLoader();
+      const tCount = APP.selectedModules.find(m => m.key === 'high_desk' || m.key === 'base_table')?.qty || 1;
+      let placed = 0;
+
+      // ⚠️ 關鍵修正：加入時間戳記，強制 GitHub 給我們最新的檔案，避免抓到舊的快取！
+      const modelUrl = 'DESK-out-.glb?v=' + new Date().getTime();
+
+      loader.load(modelUrl, function(gltf) {
+          const modelTemplate = gltf.scene;
+          
+          // 自動縮放與置中
+          const box = new THREE.Box3().setFromObject(modelTemplate);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+          
+          let scaleFactor = 1;
+          if (size.x > 0 && size.x !== Infinity) scaleFactor = 1.6 / size.x;
+
+          for(let r=0; r<rows; r++){
+            for(let c=0; c<cols; c++){
+              if(matrix[r][c] === 'FREE' && placed < tCount) {
+                 const cx = c*cellW + cellW/2; const cz = r*cellW + cellW/2;
+                 const unit = modelTemplate.clone();
+                 unit.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                 unit.position.set(cx - center.x*scaleFactor, -box.min.y*scaleFactor, cz - center.z*scaleFactor);
+                 scene.add(unit);
+                 placed++;
+              }
+            }
+          }
+          loadingEl.style.display = 'none';
+      }, (xhr) => {
+          // 進度條顯示
+          if (xhr.lengthComputable) {
+             const pct = Math.round((xhr.loaded / xhr.total) * 100);
+             loadingEl.innerHTML = `<div class="spinner"></div>正在下載 3D 模型 (${pct}%)<br><span style="font-size:0.8rem; color:var(--text-secondary);">已下載 ${Math.round(xhr.loaded/1024)} KB</span>`;
+          } else {
+             loadingEl.innerHTML = `<div class="spinner"></div>正在下載 3D 模型...<br><span style="font-size:0.8rem; color:var(--text-secondary);">已下載 ${Math.round(xhr.loaded/1024)} KB</span>`;
+          }
+      }, (error) => {
+          // ⚠️ 錯誤直接印在畫面上
+          console.error("3D 載入錯誤:", error);
+          loadingEl.innerHTML = `⚠️ 載入模型失敗！<br><br><span style="font-size:0.85rem;color:#E57373;background:#fff;padding:8px;border-radius:8px;">錯誤原因: ${error.message || '檔案毀損或路徑錯誤'}</span><br><br><span style="font-size:0.8rem">請確認 GitHub 上的檔案名稱是否完全等於 <b>DESK-out-.glb</b> (大小寫必須一致)</span>`;
+      });
+  } catch(err) {
+      loadingEl.innerHTML = `⚠️ 程式庫錯誤<br><span style="font-size:0.85rem;color:#E57373;">${err.message}</span>`;
+  }
+
+  function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
+  animate();
+}
 
   // 載入 GLB 模型
   const loader = new THREE.GLTFLoader();
