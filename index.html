@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow Table 空間管理系統</title>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+<style>
+/* ── 溫和風格色票 ── */
+:root {
+  --bg-primary: #F9FAF8;      
+  --bg-secondary: #F0F4F2;    
+  --bg-card: #FFFFFF;         
+  --accent: #6B9080;          
+  --accent-dim: rgba(107, 144, 128, 0.15);
+  --accent-hover: #5A7A6D;
+  --text-primary: #4A4A4A;    
+  --text-secondary: #8C9990;  
+  --danger: #E57373;          
+  --warning: #FFB74D;         
+  --success: #81C784;         
+  --radius: 20px;
+  --radius-sm: 12px;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.04);
+  --transition: 0.3s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', '微軟正黑體', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+  line-height: 1.6;
+}
+
+/* ── 頂部導覽列 ── */
+.app-header {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(107, 144, 128, 0.1);
+  padding: 12px 24px;
+}
+.header-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.app-logo {
+  font-size: 1.3rem; font-weight: 700; color: var(--text-primary);
+  display: flex; align-items: center; gap: 8px; letter-spacing: 0.5px;
+}
+.app-logo span { color: var(--accent); }
+
+/* ── 流程進度條 ── */
+.stepper { display: flex; align-items: center; gap: 0; }
+.step { display: flex; align-items: center; gap: 0; }
+.step-circle {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 2px solid var(--bg-secondary); background: var(--bg-secondary);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; font-weight: 700; color: var(--text-secondary);
+  transition: all var(--transition); cursor: pointer; flex-shrink: 0;
+}
+.step-circle:hover { border-color: var(--accent); color: var(--accent); }
+.step.active .step-circle {
+  border-color: var(--accent); background: var(--bg-card); color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-dim);
+}
+.step.done .step-circle {
+  border-color: var(--accent); background: var(--accent); color: #fff;
+}
+.step-line {
+  width: 32px; height: 3px; background: var(--bg-secondary); transition: background var(--transition);
+}
+.step.done + .step .step-line, .step.done .step-line { background: var(--accent); }
+
+/* ── 主要內容區 ── */
+.main-content {
+  max-width: 1200px; margin: 0 auto;
+  padding: 100px 24px 120px;
+}
+.phase-section { display: none; animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
+.phase-section.active { display: block; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.phase-title { font-size: 1.8rem; font-weight: 700; margin-bottom: 8px; color: var(--text-primary); }
+.phase-subtitle { color: var(--text-secondary); margin-bottom: 24px; font-size: 1rem; }
+
+/* ── 卡片設計 ── */
+.card {
+  background: var(--bg-card); border-radius: var(--radius);
+  padding: 24px; box-shadow: var(--shadow);
+  border: 1px solid rgba(0,0,0,0.02); transition: box-shadow var(--transition);
+}
+.card:hover { box-shadow: 0 12px 32px rgba(0,0,0,0.06); }
+.card-title {
+  font-size: 1.15rem; font-weight: 700; margin-bottom: 20px;
+  display: flex; align-items: center; gap: 8px; color: var(--text-primary);
+}
+
+/* ── AI 視覺分析區 ── */
+.vision-wrap {
+  position: relative; background: #E8ECEA; border-radius: var(--radius-sm);
+  overflow: hidden; aspect-ratio: 16/9; max-height: 400px; display: flex; align-items: center; justify-content: center;
+}
+#visionVideo { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+#visionCanvas { position: absolute; width: 100%; height: 100%; object-fit: cover; pointer-events: none; z-index: 10; }
+.vision-overlay {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.85); z-index: 20; backdrop-filter: blur(4px); transition: opacity 0.3s;
+}
+.ai-status-pill {
+  position: absolute; top: 16px; left: 16px; background: rgba(255,255,255,0.9);
+  padding: 6px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1); z-index: 15;
+}
+
+/* ── 表單設計 ── */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+.form-group { display: flex; flex-direction: column; gap: 8px; }
+.form-group label { font-size: 0.9rem; color: var(--text-secondary); font-weight: 600; }
+.form-group input, .form-group select {
+  background: var(--bg-primary); border: 2px solid transparent;
+  border-radius: var(--radius-sm); padding: 12px 16px;
+  color: var(--text-primary); font-size: 1rem; font-family: inherit;
+  transition: all var(--transition); outline: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+}
+.form-group input:focus, .form-group select:focus {
+  border-color: var(--accent-dim); background: var(--bg-card); box-shadow: 0 0 0 4px var(--accent-dim);
+}
+
+/* ── 標籤 (Tags) ── */
+.module-tags, .esg-tags { display: flex; flex-wrap: wrap; gap: 10px; }
+.module-tag, .esg-tag {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 24px; font-size: 0.9rem; font-weight: 600;
+  background: var(--bg-primary); color: var(--text-primary); border: 1px solid rgba(0,0,0,0.05);
+}
+.module-tag .qty { color: var(--text-secondary); font-weight: 400; }
+.esg-tag.env { background: rgba(129,199,132,0.15); color: #4CAF50; border-color: rgba(129,199,132,0.3); }
+.esg-tag.social { background: rgba(100,181,246,0.15); color: #2196F3; border-color: rgba(100,181,246,0.3); }
+
+/* ── 按鈕設計 (Buttons) ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 24px; border-radius: 24px; border: none;
+  font-size: 1rem; font-weight: 600; cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); outline: none; font-family: inherit;
+}
+.btn-primary { background: var(--accent); color: #fff; box-shadow: 0 4px 12px var(--accent-dim); }
+.btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px); box-shadow: 0 6px 16px var(--accent-dim); }
+.btn-secondary { background: var(--bg-secondary); color: var(--text-primary); }
+
+/* ── 3D Container ── */
+#three-container {
+  width: 100%; height: 500px; border-radius: var(--radius); overflow: hidden; position: relative;
+  box-shadow: inset 0 2px 12px rgba(0,0,0,0.05); background: var(--bg-secondary);
+}
+.three-legend {
+  position: absolute; top: 16px; right: 16px; background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(8px); border-radius: var(--radius-sm); padding: 16px;
+  font-size: 0.85rem; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); z-index: 10;
+}
+.loading-3d {
+  position: absolute; inset: 0; background: rgba(240,244,242,0.9);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 50; color: var(--accent); font-weight: 600;
+}
+
+/* 其他共用元件 */
+.power-grid, .gauge-grid, .report-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px;
+}
+.stat-box {
+  text-align: center; padding: 20px; background: var(--bg-primary); border-radius: var(--radius-sm);
+}
+.stat-value { font-size: 2rem; font-weight: 800; color: var(--accent); line-height: 1.2; }
+.stat-label { font-size: 0.9rem; color: var(--text-secondary); margin-top: 8px; font-weight: 500; }
+
+.gauge-svg { width: 140px; height: 140px; margin: 0 auto; display: block; }
+.gauge-bg { fill: none; stroke: var(--bg-secondary); stroke-width: 12; stroke-linecap: round;}
+.gauge-fill { fill: none; stroke-width: 12; stroke-linecap: round; transition: stroke-dashoffset 1s; }
+
+.nav-footer {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+  background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(0,0,0,0.05); padding: 16px 24px;
+}
+.nav-inner { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <div class="app-logo"><span>🌿</span> Flow Table 空間管理系統</div>
+    <div class="stepper" id="stepper">
+      <div class="step active"><span class="step-circle" onclick="goToPhase(1)">1</span></div><div class="step-line"></div>
+      <div class="step"><span class="step-circle" onclick="goToPhase(2)">2</span></div><div class="step-line"></div>
+      <div class="step"><span class="step-circle" onclick="goToPhase(3)">3</span></div><div class="step-line"></div>
+      <div class="step"><span class="step-circle" onclick="goToPhase(4)">4</span></div><div class="step-line"></div>
+      <div class="step"><span class="step-circle" onclick="goToPhase(5)">5</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="main-content">
+  <section class="phase-section active" id="phase-1">
+    <h2 class="phase-title">環境感知與活動設定</h2>
+    <p class="phase-subtitle">啟動 AI 鏡頭掃描空間，系統將自動為您評估場域大小、光線品質與合適的活動模組。</p>
+    <div class="card" style="margin-bottom: 24px;">
+      <div class="card-title"><span class="icon">✨</span> AI 雙重空間分析</div>
+      <div class="vision-wrap" id="vision-wrap">
+        <video id="visionVideo" autoplay playsinline muted></video>
+        <canvas id="visionCanvas"></canvas>
+        <div class="ai-status-pill" id="visionStatus" style="display:none;">待命中</div>
+        <div class="vision-overlay" id="visionOverlay">
+          <button class="btn btn-primary" onclick="startAIAnalysis()">啟動空間掃描</button>
+        </div>
+      </div>
+      <div id="aiResultText" style="margin-top: 16px; font-size: 0.95rem; font-weight: 500; color: var(--accent); min-height: 24px;"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">📝</span> 參數確認與微調</div>
+      <div class="form-grid">
+        <div class="form-group"><label>活動類型</label><select id="eventType" onchange="selectModules()"><option value="">請選擇</option><option value="health_clinic">健康義診</option><option value="elderly_dining">長者共餐</option><option value="outdoor_market">戶外市集</option><option value="workshop">社區工作坊</option></select></div>
+        <div class="form-group"><label>預計人數 (人)</label><input type="number" id="peopleCount" value="20" oninput="selectModules()"></div>
+        <div class="form-group"><label>場域面寬 (公尺)</label><input type="number" id="venueWidth" value="10" oninput="updateGridDimensions()"></div>
+        <div class="form-group"><label>場域縱深 (公尺)</label><input type="number" id="venueLength" value="10" oninput="updateGridDimensions()"></div>
+      </div>
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--bg-secondary);"><div class="module-tags" id="moduleTags"></div></div>
+    </div>
+  </section>
+
+  <section class="phase-section" id="phase-2">
+    <h2 class="phase-title">能源與電力調度</h2>
+    <div class="power-grid" id="powerGrid"></div>
+  </section>
+
+  <section class="phase-section" id="phase-3">
+    <h2 class="phase-title">3D 全景佈署預覽</h2>
+    <p class="phase-subtitle"><span style="color:var(--danger)">■ 紅色</span> 為障礙物；<span style="color:var(--success)">■ 綠色</span> 為佈署網格。</p>
+    <div id="three-container">
+      <div id="loading3D" class="loading-3d" style="display:none;">載入 3D 模型中...</div>
+      <div class="three-legend" id="threeLegend"></div>
+    </div>
+  </section>
+
+  <section class="phase-section" id="phase-4">
+    <h2 class="phase-title">即時環境守護 (IoT)</h2>
+    <div style="display:flex; gap:12px; margin-bottom:24px;"><button class="btn btn-primary" onclick="connectSerial()">連線實體感測器</button><button class="btn btn-secondary" onclick="toggleSimulation()">啟用模擬</button></div>
+    <div class="gauge-grid">
+      <div class="card stat-box">
+        <svg class="gauge-svg" viewBox="0 0 120 120"><circle class="gauge-bg" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke-dasharray="235.6 78.5"/><circle class="gauge-fill" id="gaugeCO2" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke="var(--accent)" stroke-dasharray="235.6 78.5" stroke-dashoffset="235.6"/></svg>
+        <div class="stat-value" id="valCO2">--</div><div class="stat-label">CO₂ 濃度</div>
+      </div>
+      <div class="card stat-box">
+        <svg class="gauge-svg" viewBox="0 0 120 120"><circle class="gauge-bg" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke-dasharray="235.6 78.5"/><circle class="gauge-fill" id="gaugePM25" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke="var(--accent)" stroke-dasharray="235.6 78.5" stroke-dashoffset="235.6"/></svg>
+        <div class="stat-value" id="valPM25">--</div><div class="stat-label">PM2.5</div>
+      </div>
+      <div class="card stat-box">
+        <svg class="gauge-svg" viewBox="0 0 120 120"><circle class="gauge-bg" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke-dasharray="235.6 78.5"/><circle class="gauge-fill" id="gaugeTemp" cx="60" cy="60" r="50" transform="rotate(-90 60 60)" stroke="var(--accent)" stroke-dasharray="235.6 78.5" stroke-dashoffset="235.6"/></svg>
+        <div class="stat-value" id="valTemp">--</div><div class="stat-label">溫度</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="phase-section" id="phase-5">
+    <h2 class="phase-title">成效報告</h2>
+    <div class="report-grid" id="reportGrid"></div>
+    <div class="card" style="margin-top:24px"><div class="esg-tags" id="esgTags"></div></div>
+    <div style="margin-top:32px; text-align:center"><button class="btn btn-primary" onclick="downloadPDF()">下載報告</button></div>
+  </section>
+</main>
+
+<footer class="nav-footer">
+  <div class="nav-inner">
+    <button class="btn btn-secondary" id="btnPrev" onclick="prevPhase()" style="visibility:hidden">← 上一步</button>
+    <button class="btn btn-primary" id="btnNext" onclick="nextPhase()">下一步 →</button>
+  </div>
+</footer>
+
+<script>
+// ========== 狀態管理 ==========
+const APP = {
+  currentPhase: 1,
+  config: { eventType: '', peopleCount: 20, venueWidth: 10, venueLength: 10, brightness: 100 },
+  selectedModules: [], visionPredictions: [], spatialMap: null, visionStream: null,
+  power: {}, monitoring: { active: false, history: { co2: [], temp: [], pm25: [] } },
+  threeLoaded: false
+};
+
+const MODULES = {
+  base_table:     { name: 'Flow Table 基礎桌體', watts: 0,   color: '#A4C3B2', threeColor: 0xA4C3B2, w: 1.2, d: 0.8, h: 0.75 },
+  fan:            { name: '柔風循環模組',       watts: 30,  color: '#6B9080', threeColor: 0x6B9080, w: 0.3, d: 0.3, h: 0.15 },
+  air_purifier:   { name: 'HEPA 清淨模組',     watts: 30,  color: '#81C784', threeColor: 0x81C784, w: 0.4, d: 0.4, h: 0.4  },
+  display:        { name: '透明資訊螢幕',       watts: 50,  color: '#64B5F6', threeColor: 0x64B5F6, w: 0.5, d: 0.08,h: 0.35 },
+  sensor_unit:    { name: '智慧環境感測儀',     watts: 5,   color: '#FFB74D', threeColor: 0xFFB74D, w: 0.1, d: 0.1, h: 0.08 },
+  privacy_screen: { name: '霧面隱私隔板',       watts: 0,   color: '#E0E0E0', threeColor: 0xE0E0E0, w: 1.2, d: 0.05,h: 0.6  },
+  solar_panel:    { name: '頂棚太陽能板',       watts: 0,   color: '#4FC3F7', threeColor: 0x4FC3F7, w: 0.8, d: 0.6, h: 0.04 },
+  small_battery:  { name: '輕量電池 (500Wh)',  watts: 0,   color: '#D7CCC8', threeColor: 0xD7CCC8, w: 0.3, d: 0.3, h: 0.15, capacity: 500 },
+  large_battery:  { name: '主力電池 (2000Wh)', watts: 0,   color: '#A1887F', threeColor: 0xA1887F, w: 0.5, d: 0.4, h: 0.25, capacity: 2000 }
+};
+
+const EVENT_MODULES = {
+  health_clinic:  ['base_table', 'air_purifier', 'privacy_screen', 'sensor_unit'],
+  elderly_dining: ['base_table', 'fan', 'sensor_unit'],
+  outdoor_market: ['base_table', 'solar_panel', 'fan'],
+  workshop:       ['base_table', 'display', 'sensor_unit']
+};
+
+// ========== AI 視覺分析 ==========
+async function startAIAnalysis() {
+  const video = document.getElementById('visionVideo');
+  const overlay = document.getElementById('visionOverlay');
+  const status = document.getElementById('visionStatus');
+  overlay.style.display = 'none';
+  status.style.display = 'block';
+  status.textContent = '相機啟動中...';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+    APP.visionStream = stream;
+    await new Promise(resolve => video.onloadedmetadata = resolve);
+    status.textContent = 'AI 運算中...';
+    const model = await cocoSsd.load();
+    const canvas = document.getElementById('visionCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const predictions = await model.detect(canvas);
+    APP.visionPredictions = predictions;
+    generateSpatialGrid();
+    status.textContent = '分析完成';
+    document.getElementById('aiResultText').textContent = `辨識到 ${predictions.length} 個環境特徵點。`;
+    APP.visionStream.getTracks().forEach(t => t.stop());
+  } catch (err) { status.textContent = '相機錯誤: ' + err.message; }
+}
+
+function generateSpatialGrid() {
+  const vw = parseFloat(document.getElementById('venueWidth').value) || 10;
+  const vl = parseFloat(document.getElementById('venueLength').value) || 10;
+  const cellW = 2.0; 
+  const cols = Math.max(1, Math.floor(vw / cellW));
+  const rows = Math.max(1, Math.floor(vl / cellW));
+  let matrix = Array(rows).fill(0).map(() => Array(cols).fill('FREE'));
+  if (APP.visionPredictions.length > 0) {
+     APP.visionPredictions.forEach(p => {
+         const gridX = Math.floor((p.bbox[0] / 640) * cols);
+         const gridZ = Math.floor((p.bbox[1] / 480) * rows); 
+         if(gridZ < rows && gridX < cols) matrix[gridZ][gridX] = 'OBSTACLE';
+     });
+  } else { matrix[Math.floor(rows/2)][Math.floor(cols/2)] = 'OBSTACLE'; }
+  APP.spatialMap = { rows, cols, cellW, matrix };
+}
+
+function updateGridDimensions() { generateSpatialGrid(); }
+function selectModules() {
+  const evt = document.getElementById('eventType').value;
+  const ppl = parseInt(document.getElementById('peopleCount').value) || 0;
+  if (!evt || !ppl) return;
+  const required = EVENT_MODULES[evt] || ['base_table'];
+  const tCount = Math.max(1, Math.ceil(ppl / 4));
+  APP.selectedModules = required.map(key => ({ key, ...MODULES[key], qty: tCount }));
+  document.getElementById('moduleTags').innerHTML = APP.selectedModules.map(m => `<span class="module-tag">${m.name} × ${m.qty}</span>`).join('');
+}
+
+// ========== 流程導航 ==========
+function goToPhase(n) {
+  APP.currentPhase = n;
+  document.querySelectorAll('.phase-section').forEach((s, i) => s.classList.toggle('active', i === n - 1));
+  document.querySelectorAll('.step').forEach((s, i) => { s.classList.toggle('active', i === n - 1); s.classList.toggle('done', i < n - 1); });
+  document.getElementById('btnPrev').style.visibility = n === 1 ? 'hidden' : 'visible';
+  if (n === 2) calculatePower();
+  if (n === 3) {
+      // ✨ 修正點 2：加入延遲確保容器寬高已生成
+      const loadingEl = document.getElementById('loading3D');
+      loadingEl.style.display = 'flex';
+      setTimeout(() => initThreeScene(), 150);
+  }
+  if (n === 5) generateReport();
+}
+function nextPhase() { goToPhase(APP.currentPhase + 1); }
+function prevPhase() { goToPhase(APP.currentPhase - 1); }
+
+// ========== 2. 電量計算 ==========
+function calculatePower() {
+  let totalWatts = 0; APP.selectedModules.forEach(m => totalWatts += m.watts * m.qty);
+  const totalWh = totalWatts * 3; 
+  let batType = totalWh > 500 ? 'large_battery' : 'small_battery';
+  APP.power = { totalWatts, totalWh, batType };
+  document.getElementById('powerGrid').innerHTML = `<div class="card stat-box"><div class="stat-value">${totalWatts}W</div><div class="stat-label">總功率</div></div><div class="card stat-box"><div class="stat-value">${totalWh}Wh</div><div class="stat-label">3hr總耗電</div></div>`;
+}
+
+// ========== ✨ 修正點 3：重構後的 3D 載入邏輯 ==========
+function initThreeScene() {
+  const container = document.getElementById('three-container');
+  const loadingEl = document.getElementById('loading3D');
+  
+  // 清除舊畫面
+  Array.from(container.children).forEach(c => { if(c.tagName === 'CANVAS') c.remove(); });
+  
+  if(!APP.spatialMap) generateSpatialGrid();
+  const { rows, cols, cellW, matrix } = APP.spatialMap;
+  const vw = cols * cellW; const vl = rows * cellW;
+  const w = container.clientWidth, h = container.clientHeight;
+
+  const scene = new THREE.Scene(); scene.background = new THREE.Color('#F0F4F2'); 
+  const camera = new THREE.PerspectiveCamera(45, w/h, 0.1, 1000);
+  camera.position.set(vw*1.2, vw, vl*1.2);
+  
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  container.appendChild(renderer.domElement);
+  
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.set(vw/2, 0, vl/2); controls.update();
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(10, 20, 10); scene.add(sun);
+
+  // 繪製地面網格
+  for(let r=0; r<rows; r++){
+     for(let c=0; c<cols; c++){
+        const cx = c*cellW + cellW/2; const cz = r*cellW + cellW/2;
+        const cellGeo = new THREE.PlaneGeometry(cellW*0.9, cellW*0.9);
+        const cellMat = new THREE.MeshBasicMaterial({ color: matrix[r][c] === 'OBSTACLE' ? 0xE57373 : 0xA4C3B2, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
+        const cell = new THREE.Mesh(cellGeo, cellMat);
+        cell.rotation.x = -Math.PI/2; cell.position.set(cx, 0.01, cz); scene.add(cell);
+     }
+  }
+
+  // 載入 GLB 模型
+  const loader = new THREE.GLTFLoader();
+  const tCount = APP.selectedModules.find(m => m.key === 'base_table')?.qty || 1;
+  let placed = 0;
+
+  loader.load('./DESK-out-.glb', function(gltf) {
+      const modelTemplate = gltf.scene;
+      
+      // 自動縮放與置中
+      const box = new THREE.Box3().setFromObject(modelTemplate);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const scaleFactor = 1.6 / size.x; // 假設桌寬縮放至 1.6m
+
+      for(let r=0; r<rows; r++){
+        for(let c=0; c<cols; c++){
+          if(matrix[r][c] === 'FREE' && placed < tCount) {
+             const cx = c*cellW + cellW/2; const cz = r*cellW + cellW/2;
+             const unit = modelTemplate.clone();
+             unit.scale.set(scaleFactor, scaleFactor, scaleFactor);
+             unit.position.set(cx - center.x*scaleFactor, -box.min.y*scaleFactor, cz - center.z*scaleFactor);
+             scene.add(unit);
+             placed++;
+          }
+        }
+      }
+      loadingEl.style.display = 'none';
+  }, (xhr) => {
+      const pct = Math.round((xhr.loaded / xhr.total) * 100);
+      loadingEl.textContent = `載入模型中 (${pct}%)...`;
+  }, (error) => {
+      console.error(error);
+      loadingEl.textContent = '⚠️ 載入模型失敗，請確認檔案路徑。';
+  });
+
+  function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
+  animate();
+}
+
+// ========== 4. IoT & 報告 ==========
+function updateGauge(id, val, min, max) { document.getElementById(id).style.strokeDashoffset = 235.6 * (1 - Math.max(0, Math.min(1, (val - min) / (max - min)))); }
+function toggleSimulation() {
+  APP.monitoring.active = true;
+  setInterval(() => {
+    const co2 = 400 + Math.random()*800; const temp = 24 + Math.random()*5; const pm25 = 10 + Math.random()*30;
+    document.getElementById('valCO2').textContent = Math.round(co2);
+    document.getElementById('valTemp').textContent = temp.toFixed(1);
+    document.getElementById('valPM25').textContent = Math.round(pm25);
+    updateGauge('gaugeCO2', co2, 300, 1500); updateGauge('gaugeTemp', temp, 15, 40); updateGauge('gaugePM25', pm25, 0, 100);
+    APP.monitoring.history.co2.push(co2);
+  }, 2000);
+}
+function generateReport() {
+  const p = APP.power; const avgCO2 = APP.monitoring.history.co2.length ? APP.monitoring.history.co2.reduce((a,b)=>a+b)/APP.monitoring.history.co2.length : 450;
+  document.getElementById('reportGrid').innerHTML = `<div class="card stat-box"><div class="stat-value">${p.totalWh}</div>Wh 消耗</div><div class="card stat-box"><div class="stat-value">${Math.round(avgCO2)}</div>CO₂ 平均</div>`;
+  document.getElementById('esgTags').innerHTML = `<span class="esg-tag env">E: 低碳運轉</span><span class="esg-tag social">S: 社區健康促進</span>`;
+}
+function downloadPDF() { html2pdf().from(document.getElementById('phase-5')).save(); }
+</script>
+</body>
+</html>
